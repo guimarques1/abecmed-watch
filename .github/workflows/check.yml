@@ -2,10 +2,12 @@ name: check
 
 on:
   schedule:
-    # A cada 10 min. O cron do Actions nao aceita intervalo sorteado, entao o
+    # A cada 10 min, deslocado dos minutos redondos (:00, :10, ...) que sao os
+    # mais disputados no agendador do GitHub e os que mais sofrem descarte.
+    # O cron do Actions nao aceita intervalo sorteado, entao o
     # jitter abaixo espalha o horario. Para intervalo aleatorio de verdade,
     # use ./run.sh --loop numa maquina sua.
-    - cron: "*/10 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
 
 concurrency:
