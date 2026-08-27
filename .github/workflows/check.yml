@@ -35,12 +35,24 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 bot.py
 
+      # always(): quando o fluxo quebra o passo acima sai com 1, mas o estado
+      # traz o flag "ja avisei que quebrou". Sem salvar, a quebra notificaria
+      # de novo a cada 10 minutos.
       - name: Salvar estado
+        if: always()
         run: |
-          if [ -n "$(git status --porcelain estado.json)" ]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add estado.json
-            git commit -m "estado: $(date -u +%Y-%m-%dT%H:%MZ)"
-            git push
+          if [ -z "$(git status --porcelain estado.json)" ]; then
+            echo "nada a salvar"; exit 0
           fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add estado.json
+          git commit -m "estado: $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Um push manual no meio do caminho nao pode derrubar a verificacao.
+          for tentativa in 1 2 3; do
+            git push && exit 0
+            echo "push recusado (tentativa $tentativa), rebaseando"
+            git pull --rebase --autostash || true
+            sleep 5
+          done
+          echo "::warning::nao consegui salvar o estado; a proxima verificacao repete a notificacao"

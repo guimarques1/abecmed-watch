@@ -208,6 +208,7 @@ class Chat:
 # ----------------------------------------------------------------- fluxo
 
 MENU_HINT = re.compile(r"flor|concentrad|[óo]leo", re.I)
+FLOR_RX = re.compile(r"flor", re.I)
 GO_ON = re.compile(r"ciente|entendi|continuar|prosseguir|ok", re.I)
 
 
@@ -225,10 +226,33 @@ def reach_menu(chat, max_hops=5):
     raise FlowError("nao cheguei no menu depois de %d telas" % max_hops)
 
 
+# Ordem em que as telas de produto sao visitadas. Flor primeiro: e o motivo
+# do projeto existir, e se o fluxo quebrar no meio ja teremos a leitura dela.
+CATEGORIAS = [
+    ("FLORES", r"flor"),
+    ("CONCENTRADOS", r"concentrad"),
+    ("OLEO", r"[óo]leo"),
+]
+
+VOLTAR = r"voltar|in[íi]cio"
+
+
+def voltar_ao_menu(chat):
+    """Devolve True se conseguiu voltar ao menu principal.
+
+    Cada tela de produto oferece um "VOLTAR"; sem ele a categoria seguinte nao
+    aparece nas opcoes e o resto da coleta viraria falso negativo. A tela de
+    oleo hoje nao tem esse botao — por isso e a ultima da lista e por isso
+    aqui devolvemos um booleano em vez de estourar.
+    """
+    if not chat.pick(VOLTAR, required=False):
+        return False
+    return any(MENU_HINT.search(i) for i in chat.items)
+
+
 def collect(cpf):
     """Percorre o fluxo e devolve o relatorio em texto."""
     chat = Chat()
-    sections = []
 
     chat.pick(r"paciente")
 
@@ -237,21 +261,32 @@ def collect(cpf):
     chat.send(cpf)
 
     reach_menu(chat)
-    sections.append(("MENU", "", chat.items))
+    menu = list(chat.items)
+    sections = [("MENU", "", menu)]
 
-    # --- flores
-    chat.pick(r"flor")
-    sections.append(("FLORES", chat.text, chat.items))
-    chat.pick(r"voltar|in[íi]cio", required=False)
+    for pos, (titulo, padrao) in enumerate(CATEGORIAS):
+        escolheu = chat.pick(padrao, required=False)
 
-    # --- concentrados
-    if any(re.search(r"concentrad", i, re.I) for i in chat.items):
-        chat.pick(r"concentrad")
-        sections.append(("CONCENTRADOS", chat.text, chat.items))
+        # A tela de boas-vindas avisa que flor pode deixar de ser item de menu
+        # e passar a entrar por "Quero adquirir oleo" -> "Incluir flor". Hoje
+        # ainda esta no menu; a tentativa pelo oleo fica como rede de seguranca.
+        if not escolheu and titulo == "FLORES" and chat.pick(r"[óo]leo", required=False):
+            escolheu = chat.pick(r"flor", required=False)
+            if not escolheu:
+                voltar_ao_menu(chat)
 
-        # o oleo costuma estar pendurado nesse ramo
-        if chat.pick(r"[óo]leo", required=False):
-            sections.append(("OLEO", chat.text, chat.items))
+        if not escolheu:
+            if titulo == "FLORES":
+                raise FlowError("nao achei flores no menu — opcoes: %r" % (menu,))
+            continue
+
+        sections.append((titulo, chat.text, chat.items))
+
+        if pos < len(CATEGORIAS) - 1 and not voltar_ao_menu(chat):
+            raise FlowError(
+                "nao consegui voltar ao menu depois de %s — opcoes: %r"
+                % (titulo, chat.items)
+            )
 
     return render(sections)
 
@@ -291,15 +326,49 @@ def load_state(path):
         return {}
 
 
-def save_state(path, report):
+def save_state(path, report, quebrado=False):
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(
-            {"report": report, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
+            {
+                "report": report,
+                "quebrado": quebrado,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            },
             fh,
             ensure_ascii=False,
             indent=1,
         )
         fh.write("\n")
+
+
+SECAO_RX = re.compile(r"^== (.+) ==$")
+
+
+def split_sections(report):
+    """Desmonta o relatorio de volta em {titulo: corpo}.
+
+    O relatorio e a fonte da verdade (e o que vai pro estado.json); em vez de
+    guardar as secoes em paralelo e arriscar os dois formatos divergirem,
+    reparseamos o texto na hora de comparar.
+    """
+    out, titulo, buf = {}, None, []
+    for line in report.splitlines():
+        found = SECAO_RX.match(line)
+        if found:
+            if titulo is not None:
+                out[titulo] = "\n".join(buf).strip()
+            titulo, buf = found.group(1), []
+        elif titulo is not None:
+            buf.append(line)
+    if titulo is not None:
+        out[titulo] = "\n".join(buf).strip()
+    return out
+
+
+def secoes_alteradas(old, new):
+    """Titulos das secoes que mudaram entre duas execucoes."""
+    a, b = split_sections(old), split_sections(new)
+    return [t for t in b if b[t] != a.get(t)] + [t for t in a if t not in b]
 
 
 def added_lines(old, new):
@@ -314,13 +383,18 @@ def added_lines(old, new):
 # ------------------------------------------------------------ notificacao
 
 
-def notify(topic, title, message, tags):
-    """ntfy e outro servico: nao herda o disfarce de navegador."""
+def notify(topic, title, message, tags, priority=3):
+    """ntfy e outro servico: nao herda o disfarce de navegador.
+
+    priority 5 fura o modo silencioso do celular; 2 chega calado, sem som.
+    Flor esgota em horas — vale acordar o dono. Typo corrigido no oleo, nao.
+    """
     payload = {
         "topic": topic,
         "title": title,
         "message": message[:MAX_MSG],
         "tags": tags,
+        "priority": priority,
     }
     post_json(
         NTFY_BASE,
@@ -339,47 +413,68 @@ def notify(topic, title, message, tags):
 # ------------------------------------------------------------------ main
 
 
-def ciclo(cpf, topic, state_path, avisou_quebra):
-    """Um ciclo completo. Devolve o novo valor de avisou_quebra."""
+def ciclo(cpf, topic, state_path):
+    """Uma verificacao completa. Devolve True se o fluxo esta quebrado.
+
+    O "ja avisei que quebrou" mora no estado em disco, nao numa variavel: no
+    GitHub Actions cada verificacao e um processo novo, entao uma variavel de
+    memoria faria a quebra notificar de novo a cada 10 minutos.
+    """
+    state = load_state(state_path)
+    previous = state.get("report", "")
+    ja_avisou = bool(state.get("quebrado"))
+
     try:
         report = collect(cpf)
     except FlowError as exc:
         print("FALHA: %s" % exc, file=sys.stderr)
-        # So avisa na primeira falha da sequencia: senao vira spam a cada 9 min.
-        if topic and not avisou_quebra:
+        if topic and not ja_avisou:
             notify(
                 topic,
                 "abecmed-watch quebrou",
                 "O fluxo do bot mudou e o script nao conseguiu navegar.\n\n%s" % exc,
                 ["warning"],
+                4,
             )
+        # Preserva o ultimo catalogo bom: so o flag muda.
+        save_state(state_path, previous, quebrado=True)
         return True
 
-    if avisou_quebra:
+    if ja_avisou:
         print("voltou a funcionar")
         if topic:
             notify(topic, "abecmed-watch voltou", "Navegacao normalizada.", ["white_check_mark"])
 
-    state = load_state(state_path)
-    previous = state.get("report", "")
-
     if report == previous:
+        if ja_avisou:
+            save_state(state_path, report, quebrado=False)
         print("%s  sem mudancas" % time.strftime("%H:%M"))
         return False
+
+    novos = added_lines(previous, report)
+    destaque = "Novidades:\n" + "\n".join(novos) + "\n\n" if novos else ""
+    mudou = secoes_alteradas(previous, report) if previous else []
 
     if not previous:
         title = "abecmed-watch ativo"
         body = "Primeira execucao. Catalogo atual:\n\n%s" % report
         tags = ["seedling"]
+        priority = 3
+    elif any(FLOR_RX.search(s) for s in mudou):
+        # O motivo do projeto existir. Flor some rapido: acorda o celular.
+        title = "Flor nova na ABECMED"
+        body = "%s%s" % (destaque, report)
+        tags = ["cherry_blossom", "rotating_light"]
+        priority = 5
     else:
-        novos = added_lines(previous, report)
-        destaque = "Novidades:\n" + "\n".join(novos) + "\n\n" if novos else ""
-        title = "ABECMED mudou"
+        # Oleo, concentrado, ou a associacao so mexeu no texto. Chega calado.
+        title = ("ABECMED mudou: %s" % ", ".join(mudou).lower()) if mudou else "ABECMED mudou"
         body = "%s%s" % (destaque, report)
         tags = ["bell"]
+        priority = 2
 
-    notify(topic, title, body, tags)
-    save_state(state_path, report)
+    notify(topic, title, body, tags, priority)
+    save_state(state_path, report, quebrado=False)
     print("%s  mudanca detectada, notificacao enviada" % time.strftime("%H:%M"))
     return False
 
@@ -440,15 +535,13 @@ def main():
         return
 
     if not args.loop:
-        quebrou = ciclo(cpf, topic, args.state, False)
-        sys.exit(1 if quebrou else 0)
+        sys.exit(1 if ciclo(cpf, topic, args.state) else 0)
 
     print("Monitorando. Intervalo sorteado entre %d e %d minutos." % (lo, hi))
     print("Para parar, aperte Ctrl+C.\n")
-    avisou_quebra = False
     try:
         while True:
-            avisou_quebra = ciclo(cpf, topic, args.state, avisou_quebra)
+            ciclo(cpf, topic, args.state)
             espera = random.uniform(lo * 60, hi * 60)
             print("   proxima verificacao em %d min %02d s" % divmod(int(espera), 60)[0:2])
             time.sleep(espera)
