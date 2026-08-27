@@ -1,13 +1,18 @@
 name: check
 
 on:
+  # Gatilho principal: um servico de cron externo (cron-job.org) chama a API do
+  # GitHub a cada 10 min. O agendador do Actions e best-effort e descarta
+  # execucao sob carga — para uma flor que esgota em horas, isso nao serve.
+  repository_dispatch:
+    types: [check]
+
+  # Rede de seguranca, nao o relogio principal. Se o cron externo cair, isso
+  # ainda cobre o buraco de vez em quando. Deslocado dos minutos redondos, que
+  # sao os mais disputados no agendador.
   schedule:
-    # A cada 10 min, deslocado dos minutos redondos (:00, :10, ...) que sao os
-    # mais disputados no agendador do GitHub e os que mais sofrem descarte.
-    # O cron do Actions nao aceita intervalo sorteado, entao o
-    # jitter abaixo espalha o horario. Para intervalo aleatorio de verdade,
-    # use ./run.sh --loop numa maquina sua.
     - cron: "2,12,22,32,42,52 * * * *"
+
   workflow_dispatch:
 
 concurrency:
@@ -27,9 +32,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Espalha o horario dentro da janela de 10 min.
+      # So faz sentido no gatilho agendado, que chega em horario redondo junto
+      # com o resto do mundo. O cron externo ja marca a hora que a gente pediu.
       - name: Jitter
-        run: sleep $((RANDOM % 300))
+        if: github.event_name == 'schedule'
+        run: sleep $((RANDOM % 240))
 
       - name: Rodar
         env:
@@ -39,7 +46,7 @@ jobs:
 
       # always(): quando o fluxo quebra o passo acima sai com 1, mas o estado
       # traz o flag "ja avisei que quebrou". Sem salvar, a quebra notificaria
-      # de novo a cada 10 minutos.
+      # de novo a cada verificacao.
       - name: Salvar estado
         if: always()
         run: |
@@ -58,3 +65,17 @@ jobs:
             sleep 5
           done
           echo "::warning::nao consegui salvar o estado; a proxima verificacao repete a notificacao"
+
+      # Dead man's switch. Um monitor parado nao consegue avisar que parou —
+      # quem percebe o silencio tem que estar de fora. Pinga em always() de
+      # proposito: fluxo quebrado o proprio bot.py ja notifica no ntfy, entao
+      # aqui a pergunta e so "a verificacao aconteceu?".
+      - name: Ping do watchdog
+        if: always()
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          if [ -z "$HC_URL" ]; then
+            echo "HEALTHCHECK_URL nao configurado; pulando"; exit 0
+          fi
+          curl -fsS --retry 3 --max-time 10 "$HC_URL" >/dev/null && echo "watchdog pingado"
