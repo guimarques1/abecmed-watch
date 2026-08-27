@@ -76,27 +76,70 @@ quando cada verificação roda num processo novo (o caso do GitHub Actions).
 
 ## Rodar na nuvem (recomendado)
 
-Sem servidor, sem deixar o PC ligado:
+Sem servidor, sem deixar o PC ligado. São três peças, e a divisão de trabalho
+entre elas é a parte que importa:
 
-1. Fork deste repositório. **Deixe o fork público.**
-2. **Settings → Secrets and variables → Actions**: crie `ABECMED_CPF` e `NTFY_TOPIC`.
-3. **Settings → Actions → General → Workflow permissions**: marque **Read and write**
-   (sem isso falha com 403).
-4. Aba **Actions**, habilite e rode `check` uma vez à mão.
+| Peça | Papel |
+|---|---|
+| **cron-job.org** | o relógio — chama a API do GitHub a cada 10 min |
+| **GitHub Actions** | o executor — roda o `bot.py` e guarda o `estado.json` |
+| **healthchecks.io** | a testemunha — percebe quando as duas acima param |
 
-O cron do Actions não aceita intervalo sorteado — roda a cada 10 min com jitter.
+**Por que o relógio é externo.** O `schedule:` do Actions é best-effort: a
+documentação do próprio GitHub diz que execução agendada pode atrasar sob carga
+e **pode ser descartada**. Na prática, aqui, foram 40 min num fork e 20 min num
+repositório standalone com zero disparos. Para flor que esgota em horas isso não
+é cadência, é sorte. O `schedule:` continua no workflow, mas como rede de
+segurança — não como fonte da verdade.
 
-**Por que público.** O jitter é cobrado como tempo de execução: ~3 min por
-verificação × 144 por dia ≈ 430 min/dia. A cota grátis de repositório privado
-é 2000 min/mês — acabaria em menos de uma semana. Em repositório público os
-minutos são ilimitados. O que fica visível é o `estado.json`, ou seja o
-catálogo da associação; **o CPF e o tópico ficam nos Secrets**, que continuam
-protegidos.
+**Por que a testemunha.** Monitor parado e monitor sem novidade produzem
+exatamente o mesmo silêncio no celular. Um sistema não consegue avisar que
+morreu; quem percebe o silêncio tem que estar de fora dele.
 
-**Hibernação.** O GitHub desliga workflows agendados após 60 dias sem
-atividade humana no repositório — commit de bot não conta. Ele avisa por email
-antes; basta reabilitar na aba Actions. Se quiser evitar, faça o push do
-estado com um Personal Access Token em vez do token automático.
+### Montando
+
+1. Crie um repositório seu (público — Actions é ilimitado em repo público, e o
+   que fica visível é só o catálogo da associação). **Não use um fork:** o
+   GitHub não dispara `schedule` em repositório forkado.
+2. **Settings → Secrets and variables → Actions**, três secrets:
+   - `ABECMED_CPF` — seu CPF de associado
+   - `NTFY_TOPIC` — o tópico do ntfy
+   - `HEALTHCHECK_URL` — a Ping URL do healthchecks (opcional; sem ela o passo
+     do watchdog fica inerte)
+3. **Settings → Actions → General → Workflow permissions**: marque
+   **Read and write** (sem isso o commit do estado falha com 403).
+4. **healthchecks.io**: Add Check, Schedule `Simple`, Period `10 minutes`,
+   Grace `15 minutes`. Em Integrations, adicione **ntfy** apontando pro mesmo
+   tópico, priority alta no evento "down".
+5. **cron-job.org**: um cronjob a cada 10 min. Use o botão
+   **IMPORT FROM CURL** com o comando abaixo, trocando o token:
+
+```bash
+curl -X POST https://api.github.com/repos/SEU_USUARIO/SEU_REPO/dispatches \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  -H "Authorization: Bearer SEU_TOKEN" \
+  -d '{"event_type":"check"}'
+```
+
+O token é um fine-grained PAT com **Contents: Read and write** apenas no
+repositório do monitor. Anote a validade: quando vencer, o monitor para — e é
+o healthchecks que vai te contar.
+
+Um **TEST RUN** que devolve **204 No Content** é sucesso.
+
+### Conferindo que está de pé
+
+Verificação agendada é fácil de configurar e fácil de acreditar que funciona.
+Três provas que valem mais que a configuração parecer certa:
+
+- **roda sozinho?** Na aba Actions, procure um run `repository_dispatch` que
+  você não disparou. Enquanto todos tiverem dono, nada está automático.
+- **o watchdog avisa?** `curl https://hc-ping.com/SEU_UUID/fail` deve fazer o
+  celular tocar em segundos. Depois `curl https://hc-ping.com/SEU_UUID`
+  restaura. Watchdog não testado é decoração.
+- **hibernação:** o `schedule:` de reserva é desligado após 60 dias sem
+  atividade humana no repositório. O gatilho principal não depende disso.
 
 ## Como funciona
 
