@@ -1,5 +1,5 @@
 {
  "report": "== MENU ==\nopcoes: Quero adquirir óleo! | Quero adquirir flores! | Quero adquirir concentrados! | Quero saber o status de um pedido!\n\n== FLORES ==\n🌿 Seu limite mensal para flores é de 20 gramas.\n\nEsse total pode ser distribuído entre produtos com THC, CBD, THC_CBD.\n\n📋 Lista de flores e preços: 🌿\n\nTHC:\n- Peach Ozz (Indoor) - R$ 85.00\n- Pineapple Sorbet (indoor) - R$ 85.00\n- Double Stack (indoor) - R$ 90.00\n- Headbanger (indoor) - R$ 90.00\n\nVocê deseja adquirir inflorescências de THC, CBD ou CBG?\nopcoes: THC | VOLTAR\n\n== CONCENTRADOS ==\n🌿 Seu limite mensal para concentrados é de 30 gramas.\n\nEsse total pode ser distribuído entre produtos com THC.\n\n💧 Lista de concentrados e preços (valores para 1g):\n\nTHC:\n- Extrato Água e Gelo Choco - R$ 110.00\n\n⚖️ Os valores são referente a 1g de concentrado.\n\n🌿 Selecione o tipo de concentrado que deseja adquirir. 💚\nopcoes: THC | VOLTAR\n\n== OLEO ==\n🌿 Seu limite mensal para óleos é de 1 unidades.\n\nEsse total pode ser distribuído entre produtos com CBD.\n\nVocê busca tratamento com CBD , THC, CBG ou MISTO?\nopcoes: CBD",
  "quebrado": true,
- "updated_at": "2026-08-30T09:40:23+0000"
+ "updated_at": "2026-08-30T09:50:23+0000"
 }
