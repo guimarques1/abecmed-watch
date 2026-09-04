@@ -226,67 +226,64 @@ def reach_menu(chat, max_hops=5):
     raise FlowError("nao cheguei no menu depois de %d telas" % max_hops)
 
 
-# Ordem em que as telas de produto sao visitadas. Flor primeiro: e o motivo
-# do projeto existir, e se o fluxo quebrar no meio ja teremos a leitura dela.
+# Ordem das telas de produto no relatorio. So flor e obrigatoria: e o motivo
+# do projeto existir, e as outras podem sumir do menu sem que isso justifique
+# parar de vigiar flor.
 CATEGORIAS = [
     ("FLORES", r"flor"),
     ("CONCENTRADOS", r"concentrad"),
     ("OLEO", r"[óo]leo"),
 ]
 
-VOLTAR = r"voltar|in[íi]cio"
 
-
-def voltar_ao_menu(chat):
-    """Devolve True se conseguiu voltar ao menu principal.
-
-    Cada tela de produto oferece um "VOLTAR"; sem ele a categoria seguinte nao
-    aparece nas opcoes e o resto da coleta viraria falso negativo. A tela de
-    oleo hoje nao tem esse botao — por isso e a ultima da lista e por isso
-    aqui devolvemos um booleano em vez de estourar.
-    """
-    if not chat.pick(VOLTAR, required=False):
-        return False
-    return any(MENU_HINT.search(i) for i in chat.items)
-
-
-def collect(cpf):
-    """Percorre o fluxo e devolve o relatorio em texto."""
+def abrir(cpf):
+    """Sessao nova, identificada, parada no menu principal."""
     chat = Chat()
-
     chat.pick(r"paciente")
-
     if chat.input_type != "text input":
         raise FlowError("esperava campo de CPF, veio %r" % (chat.input_type,))
     chat.send(cpf)
-
     reach_menu(chat)
-    menu = list(chat.items)
-    sections = [("MENU", "", menu)]
+    return chat
 
-    for pos, (titulo, padrao) in enumerate(CATEGORIAS):
-        escolheu = chat.pick(padrao, required=False)
 
-        # A tela de boas-vindas avisa que flor pode deixar de ser item de menu
-        # e passar a entrar por "Quero adquirir oleo" -> "Incluir flor". Hoje
-        # ainda esta no menu; a tentativa pelo oleo fica como rede de seguranca.
-        if not escolheu and titulo == "FLORES" and chat.pick(r"[óo]leo", required=False):
-            escolheu = chat.pick(r"flor", required=False)
+def collect(cpf):
+    """Percorre o fluxo e devolve o relatorio em texto.
+
+    Uma sessao por categoria. Custa tres conversas em vez de uma, mas cada
+    leitura fica isolada — e isolamento aqui nao e luxo: quando o concentrado
+    esgotou, a tela de aviso veio sem botao VOLTAR, a navegacao encalhou e
+    levou junto a leitura de flor, que estava em estoque. Categoria que falha
+    agora sai do relatorio sozinha, sem derrubar as outras.
+    """
+    sections = []
+    menu = None
+
+    for titulo, padrao in CATEGORIAS:
+        try:
+            chat = abrir(cpf)
+            if menu is None:
+                menu = list(chat.items)
+                sections.append(("MENU", "", menu))
+
+            escolheu = chat.pick(padrao, required=False)
+
+            # A tela de boas-vindas avisa que flor pode deixar de ser item de
+            # menu e passar a entrar por "Quero adquirir oleo" -> "Incluir
+            # flor". Rede de seguranca, ainda nao aconteceu.
+            if not escolheu and titulo == "FLORES" and chat.pick(r"[óo]leo", required=False):
+                escolheu = chat.pick(r"flor", required=False)
+
             if not escolheu:
-                voltar_ao_menu(chat)
+                raise FlowError("nao achei no menu — opcoes: %r" % (chat.items,))
 
-        if not escolheu:
+            sections.append((titulo, chat.text, chat.items))
+        except FlowError as exc:
             if titulo == "FLORES":
-                raise FlowError("nao achei flores no menu — opcoes: %r" % (menu,))
-            continue
-
-        sections.append((titulo, chat.text, chat.items))
-
-        if pos < len(CATEGORIAS) - 1 and not voltar_ao_menu(chat):
-            raise FlowError(
-                "nao consegui voltar ao menu depois de %s — opcoes: %r"
-                % (titulo, chat.items)
-            )
+                raise FlowError("flores inacessivel: %s" % exc) from exc
+            # Oleo ou concentrado fora do ar nao vale acordar ninguem: a secao
+            # some do relatorio e isso vira uma notificacao de prioridade 2.
+            print("aviso: %s indisponivel (%s)" % (titulo, exc), file=sys.stderr)
 
     return render(sections)
 
