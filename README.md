@@ -177,6 +177,41 @@ segue sem eles. A tela de boas-vindas já avisou que flor pode migrar pra dentro
 do fluxo de óleo (`"Quero adquirir óleo" → "Incluir flor"`); o script tenta
 esse desvio sozinho antes de desistir.
 
+## CLI
+
+Além de `./run.sh` (uma verificação) e `./run.sh --loop`, o `bot.py` aceita
+direto:
+
+| Flag | Efeito |
+|---|---|
+| `--dry-run` | imprime o relatório, não notifica nem salva estado |
+| `--json` | imprime o relatório como JSON (`{"report", "sections"}`), sem notificar |
+| `--config PATH` | usa outro arquivo de configuração |
+| `--state PATH` | usa outro arquivo de estado |
+| `--version` | mostra a versão |
+| `--loop` | fica rodando, com intervalo sorteado entre cada verificação |
+
+`--json` é útil pra quem quer ligar o monitor a outro serviço (um cron, um
+script) sem depender do formato de texto do relatório: as seções saem já
+separadas em `sections`.
+
+## Desenvolvimento
+
+O `bot.py` é biblioteca padrão — sem dependência de runtime. Os testes usam
+`pyproject.toml` e rodam offline (não tocam no servidor nem no ntfy):
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+```
+
+Cobre o achatamento do richText em texto plano, a quebra/leitura das seções do
+relatório, persistência do estado, a decisão de notificação (prioridade 5 pra
+flor, 2 pra resto, 3 pra primeira execução) e a limpeza de cabeçalhos na chamada
+ao ntfy.
+
 ---
 
 MIT. Sem vínculo com a ABECMED — ferramenta de conveniência, de associado para associado.
