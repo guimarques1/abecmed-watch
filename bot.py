@@ -34,6 +34,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+__version__ = "1.1.0"
+
 BASE = "https://bot.abecmed.com.br"
 TYPEBOT = "pix-pagamento"
 NTFY_BASE = "https://ntfy.sh"
@@ -410,6 +412,37 @@ def notify(topic, title, message, tags, priority=3):
 # ------------------------------------------------------------------ main
 
 
+def build_notification(previous, report):
+    """Decide title/body/tags/priority from the diff. Pure — no I/O.
+
+    Returns (title, body, tags, priority). Priority 5 fura o modo silencioso do
+    celular; 2 chega calado. Flor esgota em horas — vale acordar o dono. Typo no
+    oleo, nao.
+    """
+    novos = added_lines(previous, report)
+    destaque = "Novidades:\n" + "\n".join(novos) + "\n\n" if novos else ""
+    mudou = secoes_alteradas(previous, report) if previous else []
+
+    if not previous:
+        return (
+            "abecmed-watch ativo",
+            "Primeira execucao. Catalogo atual:\n\n%s" % report,
+            ["seedling"],
+            3,
+        )
+    if any(FLOR_RX.search(s) for s in mudou):
+        # O motivo do projeto existir. Flor some rapido: acorda o celular.
+        return (
+            "Flor nova na ABECMED",
+            "%s%s" % (destaque, report),
+            ["cherry_blossom", "rotating_light"],
+            5,
+        )
+    # Oleo, concentrado, ou a associacao so mexeu no texto. Chega calado.
+    title = "ABECMED mudou: %s" % ", ".join(mudou).lower() if mudou else "ABECMED mudou"
+    return title, "%s%s" % (destaque, report), ["bell"], 2
+
+
 def ciclo(cpf, topic, state_path):
     """Uma verificacao completa. Devolve True se o fluxo esta quebrado.
 
@@ -448,28 +481,7 @@ def ciclo(cpf, topic, state_path):
         print("%s  sem mudancas" % time.strftime("%H:%M"))
         return False
 
-    novos = added_lines(previous, report)
-    destaque = "Novidades:\n" + "\n".join(novos) + "\n\n" if novos else ""
-    mudou = secoes_alteradas(previous, report) if previous else []
-
-    if not previous:
-        title = "abecmed-watch ativo"
-        body = "Primeira execucao. Catalogo atual:\n\n%s" % report
-        tags = ["seedling"]
-        priority = 3
-    elif any(FLOR_RX.search(s) for s in mudou):
-        # O motivo do projeto existir. Flor some rapido: acorda o celular.
-        title = "Flor nova na ABECMED"
-        body = "%s%s" % (destaque, report)
-        tags = ["cherry_blossom", "rotating_light"]
-        priority = 5
-    else:
-        # Oleo, concentrado, ou a associacao so mexeu no texto. Chega calado.
-        title = ("ABECMED mudou: %s" % ", ".join(mudou).lower()) if mudou else "ABECMED mudou"
-        body = "%s%s" % (destaque, report)
-        tags = ["bell"]
-        priority = 2
-
+    title, body, tags, priority = build_notification(previous, report)
     notify(topic, title, body, tags, priority)
     save_state(state_path, report, quebrado=False)
     print("%s  mudanca detectada, notificacao enviada" % time.strftime("%H:%M"))
@@ -486,6 +498,12 @@ def main():
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="imprime o relatorio, nao notifica nem salva"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="imprime o relatorio como JSON (sem notificar)"
+    )
+    parser.add_argument(
+        "--version", action="version", version="abecmed-watch %s" % __version__
     )
     parser.add_argument(
         "--loop",
@@ -517,16 +535,26 @@ def main():
         )
     if len(cpf) != 11:
         sys.exit("erro: CPF tem %d digitos, esperava 11. Rode o configurar de novo." % len(cpf))
-    if not topic and not args.dry_run:
+    if not topic and not args.dry_run and not args.json:
         sys.exit(
             "erro: topico do ntfy nao configurado.\n"
             "  Rode ./configurar.sh (Linux/macOS) ou configurar.bat (Windows),\n"
             "  ou use --dry-run para so testar sem notificar."
         )
 
-    if args.dry_run:
+    if args.json or args.dry_run:
         try:
-            print(collect(cpf))
+            report = collect(cpf)
+            if args.json:
+                print(
+                    json.dumps(
+                        {"report": report, "sections": split_sections(report)},
+                        ensure_ascii=False,
+                        indent=1,
+                    )
+                )
+            else:
+                print(report)
         except FlowError as exc:
             sys.exit("FALHA: %s" % exc)
         return

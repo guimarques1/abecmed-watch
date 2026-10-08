@@ -4,3 +4,12 @@ config.ini
 __pycache__/
 *.pyc
 .env
+
+# Testes e ferramentas de desenvolvimento
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
